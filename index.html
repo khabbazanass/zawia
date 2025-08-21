@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Earth Map → Morocco Satellite (ArcGIS)</title>
+  <style>
+    :root { --bg:#050814; --fg:#e9f1ff; --accent:#ff4d4d; }
+    html,body{height:100%;margin:0;background:radial-gradient(1000px 600px at 70% -10%, #0b1b46 0%, #08112b 45%, var(--bg) 100%);color:var(--fg);font-family:ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial;}
+    #map{position:absolute; inset:0;}
+    .hint{position:absolute; top:14px; left:50%; transform:translateX(-50%); background:rgba(8,16,36,.6); border:1px solid #2a3a68; padding:8px 12px; border-radius:999px; font-size:14px; z-index:1000}
+    .toolbar{position:absolute; top:14px; right:14px; z-index:1000; display:flex; gap:8px}
+    .btn{border:1px solid #2a3a68; background:rgba(10,18,38,.6); color:var(--fg); padding:8px 12px; border-radius:999px; text-decoration:none; cursor:pointer}
+    .btn:hover{border-color:var(--accent); box-shadow:0 0 0 2px rgba(255,77,77,.2) inset}
+    /* hand cursor for interactive country shape */
+    .leaflet-interactive{cursor:pointer}
+  </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+  <div class="hint">Click <b>Morocco</b> and have fun :)</div>
+  <div class="toolbar">
+    <button id="resetBtn" class="btn" title="Back to world view">World view</button>
+  </div>
+  <div id="map"></div>
+
+  <!-- Keep your audio file next to this HTML (or adjust the src path) -->
+  <audio id="bgm" src="zawia.mp3" preload="auto" playsinline></audio>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // --- Config ---
+    const TARGET = { lat: 33.554002, lng: -7.571472, zoomIn: 18 };
+    // Morocco broad bounding box (fallback if polygon fails)
+    const MA_BOUNDS = L.latLngBounds([[20.5, -17.5], [36.2, -0.8]]);
+
+    // --- Map setup ---
+    const map = L.map('map', { zoomControl: true });
+
+    // Base (world) layer
+    const base = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // ArcGIS World Imagery (satellite)
+    const esri = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; Esri, Maxar, Earthstar Geographics'
+    });
+
+    // Start near Morocco
+    map.setView([30, -6], 4);
+
+    // Marker (added after we switch to satellite)
+    let marker = null;
+
+    // Audio
+    const bgm = document.getElementById('bgm');
+    async function startAudio(){
+      try { bgm.loop = true; bgm.muted = false; await bgm.play(); } catch(e) { /* If blocked, user can click again */ }
+    }
+
+    // --- Load Morocco polygon and keep it clickable at all zooms ---
+    let moroccoLayer = null; // L.GeoJSON
+    (async function loadMorocco(){
+      try{
+        const url = 'https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson';
+        const res = await fetch(url);
+        const gj = await res.json();
+        const feature = gj.features.find(f => {
+          const p = f.properties || {}; 
+          return p.ISO_A3 === 'MAR' || p.ADM0_A3 === 'MAR' || p.ISO3 === 'MAR' || p.ADMIN === 'Morocco' || p.NAME_EN === 'Morocco';
+        });
+        if (feature){
+          moroccoLayer = L.geoJSON(feature, {
+            style: { color:'#ff4d4d', weight:2, fillColor:'#ff4d4d', fillOpacity:0.25 }
+          }).addTo(map);
+
+          moroccoLayer.on('mouseover', e=> e.layer.setStyle({ fillOpacity:0.35 }));
+          moroccoLayer.on('mouseout',  e=> e.layer.setStyle({ fillOpacity:0.25 }));
+          moroccoLayer.on('click',     () => enterSatellite());
+
+          // Keep it on top even after base changes/zooms
+          const bringUp = ()=> moroccoLayer.bringToFront();
+          map.on('layeradd zoomend moveend', bringUp);
+          bringUp();
+
+          // Center nicely on first load
+          try { map.fitBounds(moroccoLayer.getBounds(), { padding:[30,30] }); } catch(_){}
+        } else {
+          // Fallback: red rectangle; still clickable
+          L.rectangle(MA_BOUNDS, { color:'#ff4d4d', weight:2, fillColor:'#ff4d4d', fillOpacity:0.2 })
+            .addTo(map)
+            .on('click', () => enterSatellite());
+          map.fitBounds(MA_BOUNDS);
+        }
+      } catch(err){
+        console.warn('Failed to load Morocco GeoJSON, using bounds fallback', err);
+        L.rectangle(MA_BOUNDS, { color:'#ff4d4d', weight:2, fillColor:'#ff4d4d', fillOpacity:0.2 })
+          .addTo(map)
+          .on('click', () => enterSatellite());
+        map.fitBounds(MA_BOUNDS);
+      }
+    })();
+
+    // --- Switch to satellite and zoom to your coordinates ---
+    function enterSatellite(){
+      if (!map.hasLayer(esri)) { esri.addTo(map); }
+      if (map.hasLayer(base))  { map.removeLayer(base); }
+      if (moroccoLayer) moroccoLayer.bringToFront();
+
+      map.setView([TARGET.lat, TARGET.lng], TARGET.zoomIn, { animate: true });
+      if (!marker) {
+        marker = L.circleMarker([TARGET.lat, TARGET.lng], {
+          radius: 6, weight: 2, color: '#fff', fillColor: '#ff4d4d', fillOpacity: 0.85
+        }).addTo(map);
+      }
+      startAudio();
+    }
+
+    // Optional fallback: clicking inside the broad bounds also works
+    map.on('click', (e)=>{ if (MA_BOUNDS.contains(e.latlng)) enterSatellite(); });
+
+    // Reset button returns to world view and base layer
+    document.getElementById('resetBtn').addEventListener('click', ()=>{
+      if (map.hasLayer(esri)) map.removeLayer(esri);
+      if (!map.hasLayer(base)) base.addTo(map);
+      map.setView([30, -6], 4);
+      if (moroccoLayer) moroccoLayer.bringToFront();
+    });
+  </script>
+</body>
+</html>
